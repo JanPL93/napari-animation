@@ -70,6 +70,45 @@ animation.capture_keyframe()
 animation.animate('demo.mov', canvas_only=False)
 ```
 
+### Saving and resuming keyframes
+
+Keyframes can be saved to a file so an animation can be resumed in a later
+napari session. In the GUI, use the **Save Keyframes** / **Load Keyframes**
+buttons; from Python use:
+
+```python
+animation.save_keyframes('my_animation.json')
+# ... later, in a new session with the same data loaded ...
+animation.load_keyframes('my_animation.json')
+```
+
+The file stores each keyframe's viewer state (camera, dims, layer display
+settings, optical section), interpolation settings and a thumbnail. Pixel data
+is **not** stored; instead the source file path of each layer is recorded and
+those layers are re-opened on load (matched to keyframe state by layer name).
+Pass `reload_layers=False` to skip re-opening and match against layers already
+present in the viewer.
+
+### Ortho slicer (optical sections)
+
+An Imaris-style ortho slicer restricts the display to an optical section of a
+chosen thickness (a number of planes) centered on the currently selected plane.
+Enable it from the **Ortho slicer** panel in the GUI, or from Python:
+
+```python
+animation.ortho_slicer.enabled = True
+animation.ortho_slicer.thickness = 7          # planes
+animation.ortho_slicer.mode = 'projection'    # or 'clip'
+animation.ortho_slicer.projection_mode = 'max'  # max/mean/min/sum
+animation.ortho_slicer.apply(viewer)
+```
+
+In `projection` mode the slab is projected into the 2D slice (a thick optical
+section); in `clip` mode a 3D rendering is kept but only the slab is rendered.
+The optical-section parameters are captured into keyframes, so the thickness or
+the slab position can be animated (e.g. a slab that sweeps through z or grows
+over the movie).
+
 ## Is everything animate-able?
 
 Unfortunately, not yet! Currently differences in the following objects are tracked by the `Animation` class

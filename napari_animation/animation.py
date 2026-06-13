@@ -11,6 +11,7 @@ from tqdm import tqdm
 from .easing import Easing
 from .frame_sequence import FrameSequence
 from .key_frame import KeyFrame, KeyFrameList
+from .ortho_slicer import OrthoSlicer
 
 
 class Animation:
@@ -44,6 +45,10 @@ class Animation:
 
         self._frames = FrameSequence(self.key_frames)
 
+        # Imaris-style optical-section slicer; its parameters are captured into
+        # each keyframe so the optical section can be animated.
+        self.ortho_slicer = OrthoSlicer()
+
     def capture_keyframe(
         self, steps=15, ease=Easing.LINEAR, insert=True, position: int = None
     ):
@@ -75,7 +80,12 @@ class Animation:
                 else:
                     raise ValueError("No selected keyframe to replace !")
 
-        new_frame = KeyFrame.from_viewer(self.viewer, steps=steps, ease=ease)
+        ortho = (
+            self.ortho_slicer.to_dict() if self.ortho_slicer.enabled else None
+        )
+        new_frame = KeyFrame.from_viewer(
+            self.viewer, steps=steps, ease=ease, ortho=ortho
+        )
         new_frame.name = f"Key Frame {next(self._keyframe_counter)}"
 
         if insert:
@@ -223,6 +233,41 @@ class Animation:
 
         if not save_as_folder:
             writer.close()
+
+    def save_keyframes(self, path):
+        """Save the keyframes to a file so the animation can be resumed later.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Destination file. A ``.json`` extension is added if missing.
+
+        Returns
+        -------
+        pathlib.Path
+            The path the keyframes were written to.
+        """
+        from .io import save_animation
+
+        return save_animation(self, path)
+
+    def load_keyframes(self, path, reload_layers: bool = True):
+        """Load keyframes previously written by :meth:`save_keyframes`.
+
+        Existing keyframes are replaced. When ``reload_layers`` is ``True``
+        (default), layer data files recorded in the saved file are re-opened
+        for any layers not already present in the viewer.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Path to a previously saved keyframes file.
+        reload_layers : bool
+            Whether to re-open recorded layer data files.
+        """
+        from .io import load_animation
+
+        load_animation(self, path, reload_layers=reload_layers)
 
     def _keyframe_frame_index(self, keyframe_index):
         """Gets the frame index of the keyframe corresponding to keyframe_index."""

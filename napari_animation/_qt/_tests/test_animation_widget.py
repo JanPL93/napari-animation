@@ -17,3 +17,25 @@ def test_animation_widget(make_napari_viewer, qtbot):
     assert len(aw.animation.key_frames) == 2
     aw._delete_keyframe_callback()
     assert len(aw.animation.key_frames) == 1
+
+
+def test_animation_widget_has_keyframe_io_and_ortho(make_napari_viewer, qtbot):
+    # construction without an image layer avoids requiring an OpenGL context
+    viewer = make_napari_viewer()
+    aw = AnimationWidget(viewer)
+    qtbot.addWidget(aw)
+
+    assert aw.saveKeyframesButton.text() == "Save Keyframes"
+    assert aw.loadKeyframesButton.text() == "Load Keyframes"
+
+    # the ortho slicer widget drives the animation's OrthoSlicer
+    ortho = aw.orthoSlicerWidget
+    ortho.setChecked(True)
+    ortho.thicknessSpinBox.setValue(5)
+    assert aw.animation.ortho_slicer.enabled is True
+    assert aw.animation.ortho_slicer.thickness == 5
+
+    ortho.modeComboBox.setCurrentText("clip")
+    assert aw.animation.ortho_slicer.mode == "clip"
+    # projection type is only meaningful in projection mode
+    assert not ortho.projectionComboBox.isEnabled()

@@ -4,6 +4,8 @@ from napari import Viewer
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QErrorMessage,
+    QFileDialog,
+    QHBoxLayout,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -14,6 +16,7 @@ from ..animation import Animation
 from .frame_widget import FrameWidget
 from .keyframelistcontrol_widget import KeyFrameListControlWidget
 from .keyframeslist_widget import KeyFramesListWidget
+from .ortho_slicer_widget import OrthoSlicerWidget
 from .savedialog_widget import SaveDialogWidget
 
 
@@ -47,8 +50,25 @@ class AnimationWidget(QWidget):
             self.animation.key_frames, parent=self
         )
         self.frameWidget = FrameWidget(parent=self)
+        self.orthoSlicerWidget = OrthoSlicerWidget(parent=self)
         self.saveButton = QPushButton("Save Animation", parent=self)
         self.saveButton.setEnabled(len(self.animation.key_frames) > 1)
+
+        # buttons to persist keyframes so an animation can be resumed later
+        self.saveKeyframesButton = QPushButton("Save Keyframes", parent=self)
+        self.saveKeyframesButton.setToolTip(
+            "Save keyframes to a file to resume editing later"
+        )
+        self.saveKeyframesButton.setEnabled(bool(self.animation.key_frames))
+        self.loadKeyframesButton = QPushButton("Load Keyframes", parent=self)
+        self.loadKeyframesButton.setToolTip(
+            "Load keyframes previously saved to a file"
+        )
+        self.keyframeIOWidget = QWidget(parent=self)
+        self.keyframeIOWidget.setLayout(QHBoxLayout())
+        self.keyframeIOWidget.layout().addWidget(self.saveKeyframesButton)
+        self.keyframeIOWidget.layout().addWidget(self.loadKeyframesButton)
+
         self.animationSlider = QSlider(Qt.Horizontal, parent=self)
         self.animationSlider.setToolTip("Scroll through animation")
         self.animationSlider.setRange(0, len(self.animation._frames) - 1)
@@ -58,6 +78,8 @@ class AnimationWidget(QWidget):
         self.layout().addWidget(self.keyframesListControlWidget)
         self.layout().addWidget(self.keyframesListWidget)
         self.layout().addWidget(self.frameWidget)
+        self.layout().addWidget(self.orthoSlicerWidget)
+        self.layout().addWidget(self.keyframeIOWidget)
         self.layout().addWidget(self.saveButton)
         self.layout().addWidget(self.animationSlider)
 
@@ -86,6 +108,8 @@ class AnimationWidget(QWidget):
             self._capture_keyframe_callback
         )
         self.saveButton.clicked.connect(self._save_callback)
+        self.saveKeyframesButton.clicked.connect(self._save_keyframes_callback)
+        self.loadKeyframesButton.clicked.connect(self._load_keyframes_callback)
         self.animationSlider.valueChanged.connect(self._on_slider_moved)
         self.animation._frames.events.n_frames.connect(self._nframes_changed)
 
@@ -130,6 +154,7 @@ class AnimationWidget(QWidget):
         self.keyframesListWidget.setEnabled(has_frames)
         self.frameWidget.setEnabled(has_frames)
         self.saveButton.setEnabled(n_keyframes > 1)
+        self.saveKeyframesButton.setEnabled(has_frames)
 
     def _on_frame_index_changed(self, event=None):
         """Callback on change of last set frame index."""
@@ -174,6 +199,38 @@ class AnimationWidget(QWidget):
                 self.animation.animate(**animation_kwargs)
             except ValueError as err:
                 # Should handle other types, differently maybe
+                error_dialog = QErrorMessage()
+                error_dialog.showMessage(str(err))
+                error_dialog.exec_()
+
+    def _save_keyframes_callback(self, event=None):
+        """Save keyframes to a file so the animation can be resumed later."""
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save keyframes",
+            str(Path.home() / "animation.json"),
+            "napari-animation keyframes (*.json)",
+        )
+        if path:
+            try:
+                self.animation.save_keyframes(path)
+            except (OSError, ValueError) as err:
+                error_dialog = QErrorMessage()
+                error_dialog.showMessage(str(err))
+                error_dialog.exec_()
+
+    def _load_keyframes_callback(self, event=None):
+        """Load keyframes previously saved to a file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load keyframes",
+            str(Path.home()),
+            "napari-animation keyframes (*.json)",
+        )
+        if path:
+            try:
+                self.animation.load_keyframes(path)
+            except (OSError, ValueError, KeyError) as err:
                 error_dialog = QErrorMessage()
                 error_dialog.showMessage(str(err))
                 error_dialog.exec_()

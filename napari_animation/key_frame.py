@@ -46,11 +46,22 @@ class KeyFrame:
 
     @classmethod
     def from_viewer(
-        cls, viewer: napari.viewer.Viewer, steps=15, ease=Easing.LINEAR
+        cls,
+        viewer: napari.viewer.Viewer,
+        steps=15,
+        ease=Easing.LINEAR,
+        ortho: dict = None,
     ):
-        """Create a KeyFrame from a viewer instance."""
+        """Create a KeyFrame from a viewer instance.
+
+        Parameters
+        ----------
+        ortho : dict, optional
+            Ortho-slicer (optical section) parameters to capture, so that the
+            optical section is animated alongside the rest of the state.
+        """
         return cls(
-            viewer_state=ViewerState.from_viewer(viewer),
+            viewer_state=ViewerState.from_viewer(viewer, ortho=ortho),
             thumbnail=make_thumbnail(
                 viewer.screenshot(canvas_only=True, flash=False)
             ),
