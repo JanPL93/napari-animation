@@ -3,10 +3,28 @@ import pytest
 from napari.components import ViewerModel
 
 from napari_animation.ortho_slicer import (
+    _UNIT_ABBREVIATIONS,
     OrthoSlicer,
     axis_to_view,
+    physical_step,
     view_to_axis,
 )
+
+
+def test_physical_step_uses_scale():
+    viewer = ViewerModel()
+    viewer.add_image(np.zeros((10, 20, 20)), scale=(0.5, 0.1, 0.1))
+    step, unit = physical_step(viewer, 0)
+    assert step == pytest.approx(0.5)  # Z scale -> µm/plane (here unitless)
+    assert unit == "px"  # no physical units set -> pixels
+    # None axis -> no step
+    assert physical_step(viewer, None) == (None, "px")
+
+
+def test_unit_abbreviations():
+    assert _UNIT_ABBREVIATIONS["micrometer"] == "µm"
+    assert _UNIT_ABBREVIATIONS["nanometer"] == "nm"
+    assert _UNIT_ABBREVIATIONS["pixel"] == "px"
 
 
 def test_view_to_axis_3d():

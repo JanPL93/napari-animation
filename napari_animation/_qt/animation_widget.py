@@ -49,6 +49,9 @@ class AnimationWidget(QWidget):
         self.keyframesListWidget = KeyFramesListWidget(
             self.animation.key_frames, parent=self
         )
+        self.keyframesListWidget.set_overwrite_callback(
+            self._overwrite_keyframe_callback
+        )
         self.frameWidget = FrameWidget(parent=self)
         self.orthoSlicerWidget = OrthoSlicerWidget(parent=self)
         self.saveButton = QPushButton("Save Animation", parent=self)
@@ -139,6 +142,10 @@ class AnimationWidget(QWidget):
         """Replace current key-frame with new view"""
         self.animation.capture_keyframe(**self._input_state(), insert=False)
 
+    def _overwrite_keyframe_callback(self, index):
+        """Overwrite the key-frame at ``index`` with the current view."""
+        self.animation.overwrite_keyframe(index)
+
     def _delete_keyframe_callback(self, event=None):
         """Delete current key-frame"""
         if self.animation.key_frames.selection.active:
@@ -197,8 +204,9 @@ class AnimationWidget(QWidget):
         if animation_kwargs["path"]:
             try:
                 self.animation.animate(**animation_kwargs)
-            except ValueError as err:
-                # Should handle other types, differently maybe
+            except Exception as err:  # noqa: BLE001 - surface, don't crash
+                # Surface any rendering/encoding error to the user instead of
+                # failing silently in the Qt event loop.
                 error_dialog = QErrorMessage()
                 error_dialog.showMessage(str(err))
                 error_dialog.exec_()

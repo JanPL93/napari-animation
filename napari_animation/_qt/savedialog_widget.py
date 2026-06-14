@@ -49,21 +49,39 @@ class SaveDialogWidget(QFileDialog):
         if self.exec_():
             animation_kwargs = {}
 
-            animation_kwargs["path"] = list(self.selectedFiles())[0]
+            selected_path = list(self.selectedFiles())[0]
+            # If the user didn't type an extension, append the one implied by
+            # the chosen format filter (e.g. "MP4 (*.mp4)" -> ".mp4"). Without
+            # this, a bare name silently saves a folder of PNGs instead of the
+            # requested video.
+            animation_kwargs["path"] = self._ensure_extension(selected_path)
             animation_kwargs["fps"] = self.optionsWidget.fpsSpinBox.value()
             animation_kwargs["quality"] = int(
                 self.optionsWidget.qualitySlider.value()
             )
-            animation_kwargs[
-                "canvas_only"
-            ] = self.optionsWidget.canvasCheckBox.isChecked()
-            animation_kwargs[
-                "scale_factor"
-            ] = self.optionsWidget.scaleSpinBox.value()
+            animation_kwargs["canvas_only"] = (
+                self.optionsWidget.canvasCheckBox.isChecked()
+            )
+            animation_kwargs["scale_factor"] = (
+                self.optionsWidget.scaleSpinBox.value()
+            )
 
             return animation_kwargs
         else:
             return ""
+
+    def _ensure_extension(self, path):
+        """Append the selected filter's extension if ``path`` has none."""
+        import re
+        from pathlib import Path
+
+        if Path(path).suffix:
+            return path
+        # selectedNameFilter() looks like "MP4 (*.mp4)" or "Folder of PNGs (*)"
+        match = re.search(r"\*(\.[A-Za-z0-9]+)", self.selectedNameFilter())
+        if match:
+            return path + match.group(1)
+        return path
 
 
 class OptionsWidget(QWidget):

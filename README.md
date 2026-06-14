@@ -70,6 +70,58 @@ animation.capture_keyframe()
 animation.animate('demo.mov', canvas_only=False)
 ```
 
+### Editing keyframes
+
+Keyframes can be **dragged to reorder** them in the list. Each keyframe row has
+an **Overwrite** button that replaces that keyframe's captured view with the
+current viewer state (keeping its name, steps and easing), so you can fix up a
+single keyframe without deleting and re-adding it.
+
+### Rendering performance
+
+Frames are rendered on the main thread (napari needs its single OpenGL context
+there), while encoding and writing to disk happen on a background thread so the
+two overlap. By default `animate()` also logs a per-phase performance summary
+so you can see what is rate-limiting:
+
+```
+napari-animation performance summary:
+  interpolate  total=  0.10s  mean=    1.2ms  n=80     2.1%
+  apply        total=  0.40s  mean=    5.0ms  n=80     8.3%
+  screenshot   total=  4.10s  mean=   51.3ms  n=80    85.4%
+  encode/write total=  0.20s  mean=    2.5ms  n=80     4.2%
+  finalize     total=  0.05s
+  wall-clock   total=  4.30s
+```
+
+A large `screenshot`/`apply` share usually means the viewer is waiting on lazy
+data (e.g. dask-backed reads); a large `encode/write` share means disk/codec is
+the bottleneck. Pass `perf_log=False` to silence it. If a video writer can't be
+created, the fallback to a folder of PNGs is now reported rather than silent.
+The report is also written to a `render_log.txt` next to the output so it can be
+found and shared.
+
+When the `apply` phase dominates (lazily-loaded data such as Imaris/HDF5), the
+renderer **prefetches** upcoming frames' data slices on background threads so
+several disk reads overlap and land warm in cache:
+
+```python
+animation.animate('movie.mp4', prefetch=4, prefetch_workers=4)  # defaults
+animation.animate('movie.mp4', prefetch=8, prefetch_workers=8)  # lean in harder
+animation.animate('movie.mp4', prefetch=0)                      # disable
+```
+
+An opportunistic **dask cache** is also enabled during rendering (`dask_cache`,
+default `"auto"`) so a chunk decompressed by a prefetch thread is reused by the
+main-thread read instead of being recomputed, and frames that share a chunk are
+free. Size it explicitly with `dask_cache=2_000_000_000` or turn it off with
+`dask_cache=None`.
+
+Prefetching only warms caches (it never changes the output), and reads go
+through dask's scheduler. If your data source is not safe for concurrent reads,
+set `prefetch=0`. If your storage serves reads in parallel (SSD/NVMe/RAID),
+raise `prefetch`/`prefetch_workers` for more overlap.
+
 ### Saving and resuming keyframes
 
 Keyframes can be saved to a file so an animation can be resumed in a later
@@ -111,7 +163,9 @@ In `projection` mode the slab is projected into the 2D slice (a thick optical
 section); in `clip` mode a 3D rendering is kept but only the slab is rendered.
 The optical section defaults to the **XY** view (slab along Z) and can be
 toggled to the **XZ** or **YZ** orthogonal views (slab along Y or X), which
-changes the axis the slab runs along. The optical-section parameters are
+changes the axis the slab runs along. The widget also shows the physical
+section thickness derived from the layer scale/units (e.g. `0.5 µm/plane → 3.5
+µm` for a 7-plane section), so you know how thick the optical section is. The optical-section parameters are
 captured into keyframes, so the thickness, orientation or slab position can be
 animated (e.g. a slab that sweeps through z or grows over the movie).
 
