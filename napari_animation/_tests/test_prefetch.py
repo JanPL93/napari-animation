@@ -2,7 +2,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from napari_animation.prefetch import SlicePrefetcher, read_keys
+from napari_animation.prefetch import (
+    SlicePrefetcher,
+    dask_cache_context,
+    read_keys,
+    resolve_cache_bytes,
+)
 
 
 class CountingArray:
@@ -96,3 +101,27 @@ def test_disabled_when_depth_zero():
     assert pf._pool is None
     pf.advance(0)  # no-op
     assert pf._submitted == set()
+
+
+def test_resolve_cache_bytes():
+    assert resolve_cache_bytes(None) == 0
+    assert resolve_cache_bytes(0) == 0
+    assert resolve_cache_bytes(False) == 0
+    assert resolve_cache_bytes(123456) == 123456
+    auto = resolve_cache_bytes("auto")
+    assert 0 < auto <= 2 * 1024**3
+
+
+def test_dask_cache_context_disabled_yields_zero():
+    with dask_cache_context(None) as nbytes:
+        assert nbytes == 0
+
+
+def test_dask_cache_context_enabled_caches_results():
+    import dask.array as da
+
+    arr = da.from_array(np.arange(100).reshape(10, 10), chunks=(1, 10))
+    with dask_cache_context(10**7) as nbytes:
+        assert nbytes == 10**7
+        # cache is active and dask still computes correctly
+        np.testing.assert_array_equal(np.asarray(arr[3]), np.arange(30, 40))

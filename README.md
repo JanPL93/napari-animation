@@ -106,13 +106,21 @@ renderer **prefetches** upcoming frames' data slices on background threads so
 several disk reads overlap and land warm in cache:
 
 ```python
-animation.animate('movie.mp4', prefetch=2, prefetch_workers=2)  # defaults
+animation.animate('movie.mp4', prefetch=4, prefetch_workers=4)  # defaults
+animation.animate('movie.mp4', prefetch=8, prefetch_workers=8)  # lean in harder
 animation.animate('movie.mp4', prefetch=0)                      # disable
 ```
 
+An opportunistic **dask cache** is also enabled during rendering (`dask_cache`,
+default `"auto"`) so a chunk decompressed by a prefetch thread is reused by the
+main-thread read instead of being recomputed, and frames that share a chunk are
+free. Size it explicitly with `dask_cache=2_000_000_000` or turn it off with
+`dask_cache=None`.
+
 Prefetching only warms caches (it never changes the output), and reads go
 through dask's scheduler. If your data source is not safe for concurrent reads,
-set `prefetch=0`.
+set `prefetch=0`. If your storage serves reads in parallel (SSD/NVMe/RAID),
+raise `prefetch`/`prefetch_workers` for more overlap.
 
 ### Saving and resuming keyframes
 

@@ -16,12 +16,61 @@ concurrent reads, prefetching can be disabled with ``prefetch=0``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 logger = logging.getLogger("napari_animation")
+
+#: Cap for the "auto" dask cache size.
+_AUTO_CACHE_CAP = 2 * 1024**3  # 2 GiB
+#: Fraction of available RAM to use for the "auto" dask cache.
+_AUTO_CACHE_FRACTION = 0.25
+
+
+def resolve_cache_bytes(spec) -> int:
+    """Resolve a dask-cache size spec to a byte count (0 disables it).
+
+    ``spec`` may be ``None``/``False`` (disabled), ``"auto"`` (a fraction of
+    available RAM, capped), or an integer number of bytes.
+    """
+    if not spec:
+        return 0
+    if spec == "auto":
+        try:
+            import psutil
+
+            available = psutil.virtual_memory().available
+        except Exception:  # noqa: BLE001 - psutil optional/!available
+            available = 4 * 1024**3
+        return int(min(_AUTO_CACHE_CAP, _AUTO_CACHE_FRACTION * available))
+    return int(spec)
+
+
+@contextlib.contextmanager
+def dask_cache_context(spec):
+    """Register a dask opportunistic cache for the duration of the block.
+
+    The cache lets prefetched (decompressed) chunks be reused by the main
+    thread's slice instead of being recomputed, and makes frames that share a
+    chunk free. Yields the cache size in bytes (0 if disabled/unavailable).
+    """
+    nbytes = resolve_cache_bytes(spec)
+    if nbytes <= 0:
+        yield 0
+        return
+    try:
+        from dask.cache import Cache
+    except Exception as err:  # noqa: BLE001 - cachey may be missing
+        logger.warning(
+            "dask cache unavailable (%s); continuing without it", err
+        )
+        yield 0
+        return
+    with Cache(nbytes):
+        yield nbytes
 
 
 def _layer_level_array(layer):

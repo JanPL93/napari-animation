@@ -15,7 +15,7 @@ from .frame_sequence import FrameSequence
 from .key_frame import KeyFrame, KeyFrameList
 from .ortho_slicer import OrthoSlicer
 from .perf import PerfLogger
-from .prefetch import SlicePrefetcher
+from .prefetch import SlicePrefetcher, dask_cache_context
 
 logger = logging.getLogger("napari_animation")
 
@@ -185,8 +185,9 @@ class Animation:
         canvas_only=True,
         scale_factor=None,
         perf_log=True,
-        prefetch=2,
-        prefetch_workers=2,
+        prefetch=4,
+        prefetch_workers=4,
+        dask_cache="auto",
     ):
         """Create a movie based on key-frames
         Parameters
@@ -218,8 +219,16 @@ class Animation:
             background threads to warm the cache (overlapping disk reads). Set
             to 0 to disable. Most useful when rendering lazily-loaded data
             (e.g. dask/HDF5/Imaris) where the ``apply`` phase dominates.
+            Increase together with ``prefetch_workers`` if your storage serves
+            reads in parallel (SSD/NVMe/RAID).
         prefetch_workers : int
             Number of background threads used for prefetching.
+        dask_cache : str, int or None
+            Opportunistic dask cache used during rendering so prefetched
+            (decompressed) chunks are reused by the main-thread read instead of
+            being recomputed, and frames sharing a chunk are free. ``"auto"``
+            (default) sizes it from available RAM; pass a byte count for a
+            fixed size, or ``None``/0 to disable.
 
         Notes
         -----
@@ -323,6 +332,13 @@ class Animation:
         print(f"Rendering {n_frames} frames -> {target}")
         logger.info("Rendering %d frames -> %s", n_frames, target)
 
+        # opportunistic dask cache so prefetched chunks are reused by the
+        # main-thread read (kept active for the whole render below).
+        cache_cm = dask_cache_context(dask_cache)
+        cache_bytes = cache_cm.__enter__()
+        if cache_bytes:
+            print(f"dask cache enabled: {cache_bytes / 1e9:.1f} GB")
+
         # warm the cache for upcoming frames' data slices on background threads
         prefetcher = SlicePrefetcher(
             self.viewer,
@@ -364,6 +380,7 @@ class Animation:
             frame_queue.put(None)
             print("Waiting for encoder to finish writing queued frames...")
             writer_thread.join()
+            cache_cm.__exit__(None, None, None)
 
         if write_errors:
             if writer is not None:

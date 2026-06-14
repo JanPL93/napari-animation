@@ -71,9 +71,18 @@ def test_animate_with_prefetch_runs(tmp_path, stub_animation, capsys):
 
 def test_animate_prefetch_disabled(tmp_path, stub_animation, capsys):
     out = tmp_path / "movie.mp4"
-    stub_animation.animate(str(out), prefetch=0)
+    stub_animation.animate(str(out), prefetch=0, dask_cache=None)
     assert out.exists()
-    assert "Prefetching" not in capsys.readouterr().out
+    out_text = capsys.readouterr().out
+    assert "Prefetching" not in out_text
+    assert "dask cache" not in out_text
+
+
+def test_animate_dask_cache_enabled(tmp_path, stub_animation, capsys):
+    out = tmp_path / "movie.mp4"
+    stub_animation.animate(str(out), dask_cache=10**7)
+    assert out.exists()
+    assert "dask cache enabled" in capsys.readouterr().out
 
 
 def test_animate_writes_png_folder(tmp_path, stub_animation, capsys):
