@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from qtpy.QtWidgets import QComboBox, QFormLayout, QGroupBox, QSpinBox
 
-from ..ortho_slicer import PROJECTION_MODES
+from ..ortho_slicer import ORTHO_VIEWS, PROJECTION_MODES, view_to_axis
 
 if TYPE_CHECKING:
     from ..animation import Animation
@@ -36,6 +36,15 @@ class OrthoSlicerWidget(QGroupBox):
             "Optical section thickness, in planes"
         )
 
+        # orthogonal view: which plane the optical section faces. Defaults to
+        # XY (slab along Z); XZ/YZ slice along Y/X respectively.
+        self.viewComboBox = QComboBox()
+        self.viewComboBox.addItems(list(ORTHO_VIEWS))
+        self.viewComboBox.setToolTip(
+            "Orthogonal view the optical section faces "
+            "(XY slices Z, XZ slices Y, YZ slices X)"
+        )
+
         # display mode
         self.modeComboBox = QComboBox()
         self.modeComboBox.addItems(["projection", "clip"])
@@ -49,6 +58,7 @@ class OrthoSlicerWidget(QGroupBox):
         )
 
         layout = QFormLayout()
+        layout.addRow("View", self.viewComboBox)
         layout.addRow("Thickness (planes)", self.thicknessSpinBox)
         layout.addRow("Mode", self.modeComboBox)
         layout.addRow("Projection", self.projectionComboBox)
@@ -56,6 +66,7 @@ class OrthoSlicerWidget(QGroupBox):
 
         # callbacks
         self.toggled.connect(self._update_slicer)
+        self.viewComboBox.currentIndexChanged.connect(self._update_slicer)
         self.thicknessSpinBox.valueChanged.connect(self._update_slicer)
         self.modeComboBox.currentIndexChanged.connect(self._update_slicer)
         self.projectionComboBox.currentIndexChanged.connect(
@@ -80,6 +91,10 @@ class OrthoSlicerWidget(QGroupBox):
         slicer.thickness = self.thicknessSpinBox.value()
         slicer.mode = self.modeComboBox.currentText()
         slicer.projection_mode = self.projectionComboBox.currentText()
+        # translate the named orthogonal view into a concrete slab axis for the
+        # current data dimensionality.
+        ndim = self.animation.viewer.dims.ndim
+        slicer.axis = view_to_axis(self.viewComboBox.currentText(), ndim)
 
     def _update_slicer(self, *args):
         """Push widget state to the slicer and apply it live to the viewer."""

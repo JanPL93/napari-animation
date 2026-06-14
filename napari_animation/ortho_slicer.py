@@ -32,6 +32,33 @@ ORTHO_MODES = ("projection", "clip")
 #: Available projection types for the ``"projection"`` mode.
 PROJECTION_MODES = ("max", "mean", "min", "sum")
 
+#: Named orthogonal views mapped to the slab (depth) axis, expressed as an
+#: offset from the end of the axis list.  napari's convention puts X on the
+#: last axis, Y on the second-last and Z on the third-last, so e.g. the "XY"
+#: view is sliced along Z.  Listed in canonical (X, Y, Z) order.
+ORTHO_VIEWS = {"XY": -3, "XZ": -2, "YZ": -1}
+
+
+def view_to_axis(view: str, ndim: int) -> int:
+    """Return the slab (depth) axis for a named orthogonal view.
+
+    Uses napari's axis convention (last axis = X, second-last = Y, third-last
+    = Z), so ``"XY"`` slices along Z, ``"XZ"`` along Y and ``"YZ"`` along X.
+    For data with more than three dimensions the named views map to the last
+    three (spatial) axes; leading axes (e.g. time) are unaffected.
+    """
+    offset = ORTHO_VIEWS[view.upper()]
+    axis = ndim + offset
+    return max(0, min(axis, ndim - 1))
+
+
+def axis_to_view(axis: int, ndim: int) -> Optional[str]:
+    """Return the named orthogonal view for a slab ``axis`` (or ``None``)."""
+    for name, offset in ORTHO_VIEWS.items():
+        if ndim + offset == axis:
+            return name
+    return None
+
 
 @dataclass
 class OrthoSlicer:
@@ -51,8 +78,11 @@ class OrthoSlicer:
         How the slab is projected in ``"projection"`` mode: one of
         ``"max"``, ``"mean"``, ``"min"`` or ``"sum"``.
     axis : int, optional
-        The axis to slice along.  When ``None`` (default) the first
-        not-displayed axis of the viewer (the active slider axis) is used.
+        The axis the optical-section slab runs along.  When ``None`` (default)
+        the slicer uses the first not-displayed axis of the viewer (the active
+        slider axis), falling back to the Z axis in a 3D display -- i.e. an XY
+        optical section by default.  Use :func:`view_to_axis` to set this from a
+        named orthogonal view (``"XY"`` / ``"XZ"`` / ``"YZ"``).
     """
 
     enabled: bool = False
@@ -113,6 +143,10 @@ class OrthoSlicer:
         not_displayed = tuple(viewer.dims.not_displayed)
         if not_displayed:
             return int(not_displayed[0])
+        # 3D display has no slider axis; default to Z (an XY optical section).
+        ndim = viewer.dims.ndim
+        if ndim >= 3:
+            return ndim - 3
         return None
 
     @staticmethod

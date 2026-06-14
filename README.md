@@ -96,18 +96,24 @@ chosen thickness (a number of planes) centered on the currently selected plane.
 Enable it from the **Ortho slicer** panel in the GUI, or from Python:
 
 ```python
+from napari_animation.ortho_slicer import view_to_axis
+
 animation.ortho_slicer.enabled = True
 animation.ortho_slicer.thickness = 7          # planes
 animation.ortho_slicer.mode = 'projection'    # or 'clip'
 animation.ortho_slicer.projection_mode = 'max'  # max/mean/min/sum
+# orientation: defaults to XY; toggle to XZ / YZ via the GUI or set the axis
+animation.ortho_slicer.axis = view_to_axis('YZ', viewer.dims.ndim)
 animation.ortho_slicer.apply(viewer)
 ```
 
 In `projection` mode the slab is projected into the 2D slice (a thick optical
 section); in `clip` mode a 3D rendering is kept but only the slab is rendered.
-The optical-section parameters are captured into keyframes, so the thickness or
-the slab position can be animated (e.g. a slab that sweeps through z or grows
-over the movie).
+The optical section defaults to the **XY** view (slab along Z) and can be
+toggled to the **XZ** or **YZ** orthogonal views (slab along Y or X), which
+changes the axis the slab runs along. The optical-section parameters are
+captured into keyframes, so the thickness, orientation or slab position can be
+animated (e.g. a slab that sweeps through z or grows over the movie).
 
 ## Is everything animate-able?
 

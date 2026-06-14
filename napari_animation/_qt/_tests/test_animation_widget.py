@@ -39,3 +39,11 @@ def test_animation_widget_has_keyframe_io_and_ortho(make_napari_viewer, qtbot):
     assert aw.animation.ortho_slicer.mode == "clip"
     # projection type is only meaningful in projection mode
     assert not ortho.projectionComboBox.isEnabled()
+
+    # the orthogonal view defaults to XY and can be toggled to XZ / YZ
+    assert ortho.viewComboBox.currentText() == "XY"
+    ndim = viewer.dims.ndim
+    from napari_animation.ortho_slicer import view_to_axis
+
+    ortho.viewComboBox.setCurrentText("YZ")
+    assert aw.animation.ortho_slicer.axis == view_to_axis("YZ", ndim)

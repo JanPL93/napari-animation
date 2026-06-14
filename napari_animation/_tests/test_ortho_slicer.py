@@ -2,7 +2,29 @@ import numpy as np
 import pytest
 from napari.components import ViewerModel
 
-from napari_animation.ortho_slicer import OrthoSlicer
+from napari_animation.ortho_slicer import (
+    OrthoSlicer,
+    axis_to_view,
+    view_to_axis,
+)
+
+
+def test_view_to_axis_3d():
+    # napari convention: last axis = X, second-last = Y, third-last = Z
+    assert view_to_axis("XY", 3) == 0  # slice Z
+    assert view_to_axis("XZ", 3) == 1  # slice Y
+    assert view_to_axis("YZ", 3) == 2  # slice X
+    # extra leading (e.g. time) axes leave the spatial mapping intact
+    assert view_to_axis("XY", 4) == 1
+    assert view_to_axis("YZ", 4) == 3
+    # case-insensitive
+    assert view_to_axis("xy", 3) == 0
+
+
+def test_axis_to_view_round_trip():
+    for ndim in (3, 4, 5):
+        for view in ("XY", "XZ", "YZ"):
+            assert axis_to_view(view_to_axis(view, ndim), ndim) == view
 
 
 @pytest.fixture
@@ -117,6 +139,19 @@ def test_ortho_params_interpolate_and_apply(model_viewer):
     # a mid-animation interpolated state still applies to a viewer
     frames[len(frames) // 2].apply(model_viewer)
     assert model_viewer.dims.margin_left[0] > 0
+
+
+def test_clip_axis_follows_selected_view(model_viewer):
+    # YZ view -> slab along X (axis 2 for 3D data)
+    axis = view_to_axis("YZ", model_viewer.dims.ndim)
+    OrthoSlicer(enabled=True, thickness=4, mode="clip", axis=axis).apply(
+        model_viewer
+    )
+    planes = model_viewer.layers["img"].experimental_clipping_planes
+    assert len(planes) == 2
+    # the clipping planes are oriented along the X axis, not Z
+    assert planes[0].normal[2] == pytest.approx(1.0)
+    assert planes[0].normal[0] == pytest.approx(0.0)
 
 
 def test_clip_then_disable_clears_planes(model_viewer):
