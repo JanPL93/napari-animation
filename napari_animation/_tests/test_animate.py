@@ -62,6 +62,20 @@ def test_animate_writes_mp4(tmp_path, stub_animation):
     assert out.stat().st_size > 0
 
 
+def test_animate_with_prefetch_runs(tmp_path, stub_animation, capsys):
+    out = tmp_path / "movie.mp4"
+    stub_animation.animate(str(out), prefetch=2, prefetch_workers=2)
+    assert out.exists()
+    assert "Prefetching up to 2 frame(s)" in capsys.readouterr().out
+
+
+def test_animate_prefetch_disabled(tmp_path, stub_animation, capsys):
+    out = tmp_path / "movie.mp4"
+    stub_animation.animate(str(out), prefetch=0)
+    assert out.exists()
+    assert "Prefetching" not in capsys.readouterr().out
+
+
 def test_animate_writes_png_folder(tmp_path, stub_animation, capsys):
     out = tmp_path / "frames"  # no extension -> folder of PNGs
     stub_animation.animate(str(out))

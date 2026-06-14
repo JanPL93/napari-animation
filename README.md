@@ -98,6 +98,21 @@ A large `screenshot`/`apply` share usually means the viewer is waiting on lazy
 data (e.g. dask-backed reads); a large `encode/write` share means disk/codec is
 the bottleneck. Pass `perf_log=False` to silence it. If a video writer can't be
 created, the fallback to a folder of PNGs is now reported rather than silent.
+The report is also written to a `render_log.txt` next to the output so it can be
+found and shared.
+
+When the `apply` phase dominates (lazily-loaded data such as Imaris/HDF5), the
+renderer **prefetches** upcoming frames' data slices on background threads so
+several disk reads overlap and land warm in cache:
+
+```python
+animation.animate('movie.mp4', prefetch=2, prefetch_workers=2)  # defaults
+animation.animate('movie.mp4', prefetch=0)                      # disable
+```
+
+Prefetching only warms caches (it never changes the output), and reads go
+through dask's scheduler. If your data source is not safe for concurrent reads,
+set `prefetch=0`.
 
 ### Saving and resuming keyframes
 

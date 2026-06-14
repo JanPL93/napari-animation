@@ -15,6 +15,7 @@ from .frame_sequence import FrameSequence
 from .key_frame import KeyFrame, KeyFrameList
 from .ortho_slicer import OrthoSlicer
 from .perf import PerfLogger
+from .prefetch import SlicePrefetcher
 
 logger = logging.getLogger("napari_animation")
 
@@ -184,6 +185,8 @@ class Animation:
         canvas_only=True,
         scale_factor=None,
         perf_log=True,
+        prefetch=2,
+        prefetch_workers=2,
     ):
         """Create a movie based on key-frames
         Parameters
@@ -210,13 +213,21 @@ class Animation:
             If True (default), time each phase of the render pipeline
             (interpolate / apply / screenshot / encode) and log a summary so
             the rate-limiting step is visible.
+        prefetch : int
+            Number of upcoming frames whose data slices are read ahead on
+            background threads to warm the cache (overlapping disk reads). Set
+            to 0 to disable. Most useful when rendering lazily-loaded data
+            (e.g. dask/HDF5/Imaris) where the ``apply`` phase dominates.
+        prefetch_workers : int
+            Number of background threads used for prefetching.
 
         Notes
         -----
         Frames are rendered on the calling (main) thread -- napari needs its
-        single OpenGL context there -- while encoding and writing to disk run
-        on a background thread, so the two overlap. This keeps the writer busy
-        while the next frame renders and avoids a silent pause at the end.
+        single OpenGL context there -- while encoding/writing to disk and
+        prefetching the next frames' data run on background threads, so they
+        overlap. This keeps the disk and writer busy while a frame renders and
+        avoids a silent pause at the end.
         """
         self._validate_animation()
 
@@ -312,11 +323,26 @@ class Animation:
         print(f"Rendering {n_frames} frames -> {target}")
         logger.info("Rendering %d frames -> %s", n_frames, target)
 
+        # warm the cache for upcoming frames' data slices on background threads
+        prefetcher = SlicePrefetcher(
+            self.viewer,
+            self._frames,
+            depth=prefetch,
+            workers=prefetch_workers,
+        )
+        if prefetcher.enabled:
+            print(
+                f"Prefetching up to {prefetcher.depth} frame(s) ahead on "
+                f"{prefetch_workers} thread(s)"
+            )
+
         try:
             with tqdm(total=n_frames) as pbar:
                 for ind in range(n_frames):
                     if write_errors:
                         break
+                    # kick off reads for the look-ahead window
+                    prefetcher.advance(ind)
                     with perf.timer("interpolate"):
                         state = self._frames[ind]
                     with perf.timer("apply"):
@@ -334,6 +360,7 @@ class Animation:
                     pbar.update(1)
         finally:
             # signal the writer to finish and wait for the queue to drain
+            prefetcher.shutdown()
             frame_queue.put(None)
             print("Waiting for encoder to finish writing queued frames...")
             writer_thread.join()
