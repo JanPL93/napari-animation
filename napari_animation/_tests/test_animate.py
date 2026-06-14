@@ -62,12 +62,28 @@ def test_animate_writes_mp4(tmp_path, stub_animation):
     assert out.stat().st_size > 0
 
 
-def test_animate_writes_png_folder(tmp_path, stub_animation):
+def test_animate_writes_png_folder(tmp_path, stub_animation, capsys):
     out = tmp_path / "frames"  # no extension -> folder of PNGs
     stub_animation.animate(str(out))
     pngs = list((tmp_path / "frames").glob("*.png"))
     # 2 keyframes, second has steps=3 -> 3 + 1 frames
     assert len(pngs) == 4
+    # the user is told up-front that PNGs (not a video) are being written
+    assert "No video file extension" in capsys.readouterr().out
+
+
+def test_animate_writes_render_log(tmp_path, stub_animation):
+    # video -> log sits next to the file
+    out = tmp_path / "movie.mp4"
+    stub_animation.animate(str(out))
+    assert (tmp_path / "movie.render_log.txt").exists()
+    log = (tmp_path / "movie.render_log.txt").read_text()
+    assert "performance summary" in log and "frames:" in log
+
+    # folder -> log sits inside the folder
+    folder_out = tmp_path / "frames"
+    stub_animation.animate(str(folder_out))
+    assert (tmp_path / "frames" / "render_log.txt").exists()
 
 
 def test_animate_loud_fallback_when_writer_fails(

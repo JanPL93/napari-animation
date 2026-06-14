@@ -229,6 +229,16 @@ class Animation:
 
         # if path has no extension, save as folder of PNG
         save_as_folder = path_obj.suffix == ""
+        if save_as_folder:
+            # This is a common surprise: a path without a video extension
+            # produces a folder of PNGs rather than a movie. Say so clearly.
+            msg = (
+                f"No video file extension in {path!r}: saving a folder of PNG "
+                "frames instead of a video. For a movie, give a path ending in "
+                ".mp4, .mov, .gif, .avi, .mkv, etc."
+            )
+            logger.warning(msg)
+            print(f"NOTE: {msg}")
 
         # try to create an ffmpeg writer. If not available, fall back to a
         # folder of PNGs -- but make that fallback *loud*, since silently
@@ -345,13 +355,51 @@ class Animation:
                 writer.close()
             print(f"Saved animation to {path}")
             logger.info("Saved animation to %s", path)
+            output = path_obj
         else:
             print(f"Saved {n_frames} PNG frames to {folder_path}")
             logger.info("Saved %d PNG frames to %s", n_frames, folder_path)
+            output = folder_path
 
         if perf_log:
-            print(perf.report())
+            report = perf.report()
+            print(report)
             perf.log_report()
+            # also write the report to a file the user can find and report back
+            log_path = self._write_render_log(output, n_frames, report)
+            if log_path is not None:
+                print(f"Performance log written to: {log_path}")
+
+    @staticmethod
+    def _write_render_log(output: Path, n_frames: int, report: str):
+        """Write the render performance report next to the output.
+
+        For a video file ``movie.mp4`` the log is ``movie.render_log.txt``
+        alongside it; for a folder of PNGs it is ``render_log.txt`` inside the
+        folder. Returns the log path, or ``None`` if it could not be written.
+        """
+        from datetime import datetime
+
+        output = Path(output)
+        if output.suffix:  # a file (video)
+            log_path = output.with_name(output.stem + ".render_log.txt")
+        else:  # a folder of PNGs
+            log_path = output / "render_log.txt"
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().isoformat(timespec="seconds")
+            with open(log_path, "w") as f:
+                f.write(
+                    f"napari-animation render log\n"
+                    f"timestamp: {timestamp}\n"
+                    f"output: {output}\n"
+                    f"frames: {n_frames}\n\n"
+                    f"{report}\n"
+                )
+            return log_path
+        except OSError as err:  # don't fail the render over a log file
+            logger.warning("Could not write render log: %s", err)
+            return None
 
     def save_keyframes(self, path):
         """Save the keyframes to a file so the animation can be resumed later.
