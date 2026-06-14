@@ -1,7 +1,40 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 import napari
 import numpy as np
+
+from .ortho_slicer import OrthoSlicer
+
+
+def _resilient_update(model, state: dict):
+    """``model.update(state)`` that tolerates non-restorable fields.
+
+    When a viewer state is restored from disk, a few fields (e.g. pint ``units``
+    on dims) deserialize to plain strings that napari's validators won't coerce
+    back on a bulk update. Rather than failing the whole update, drop the
+    offending keys and retry so everything else is still applied.
+    """
+    state = dict(state)
+    while state:
+        try:
+            model.update(state)
+            return
+        except (
+            Exception
+        ) as err:  # noqa: BLE001 - tolerate any validation error
+            errors = getattr(err, "errors", None)
+            bad_keys = set()
+            if callable(errors):
+                for entry in errors():
+                    loc = entry.get("loc")
+                    if loc:
+                        bad_keys.add(loc[0])
+            bad_keys &= set(state)
+            if not bad_keys:
+                raise
+            for key in bad_keys:
+                state.pop(key, None)
 
 
 @dataclass(frozen=True)
@@ -17,22 +50,38 @@ class ViewerState:
     layers : dict
         A map of layer.name -> _base_state for each layer in the viewer
         (excluding metadata).
+    ortho : dict, optional
+        Parameters of the :class:`~napari_animation.ortho_slicer.OrthoSlicer`
+        optical section (``None`` when the slicer is inactive).  Stored so the
+        optical section can be animated alongside the rest of the viewer state.
     """
 
     camera: dict
     dims: dict
     layers: dict
+    ortho: Optional[dict] = field(default=None)
 
     @classmethod
-    def from_viewer(cls, viewer: napari.viewer.Viewer):
-        """Create a ViewerState from a viewer instance."""
+    def from_viewer(cls, viewer: napari.viewer.Viewer, ortho: dict = None):
+        """Create a ViewerState from a viewer instance.
+
+        Parameters
+        ----------
+        viewer : napari.viewer.Viewer
+            A napari viewer.
+        ortho : dict, optional
+            Ortho-slicer parameters to record alongside the viewer state.
+        """
         layers = {
             layer.name: layer._get_base_state() for layer in viewer.layers
         }
         for d in layers.values():
             d.pop("metadata")
         return cls(
-            camera=viewer.camera.dict(), dims=viewer.dims.dict(), layers=layers
+            camera=viewer.camera.dict(),
+            dims=viewer.dims.dict(),
+            layers=layers,
+            ortho=ortho,
         )
 
     def apply(self, viewer: napari.viewer.Viewer):
@@ -44,16 +93,25 @@ class ViewerState:
             A napari viewer. (viewer state will be directly modified)
         """
 
-        viewer.camera.update(self.camera)
-        viewer.dims.update(self.dims)
+        _resilient_update(viewer.camera, self.camera)
+        _resilient_update(viewer.dims, self.dims)
 
         for layer_name, layer_state in self.layers.items():
+            # Layers may be missing if the same data has not been loaded (for
+            # instance when resuming a saved animation); skip them gracefully.
+            if layer_name not in viewer.layers:
+                continue
             layer = viewer.layers[layer_name]
             for key, value in layer_state.items():
                 original_value = getattr(layer, key)
                 # Only set if value differs to avoid expensive redraws
                 if not np.array_equal(original_value, value):
                     setattr(layer, key, value)
+
+        # The optical section is recomputed from its parameters and the (now
+        # applied) dims, so a sweeping/growing slab interpolates smoothly.
+        if self.ortho is not None:
+            OrthoSlicer.apply_state(viewer, self.ortho)
 
     def render(
         self, viewer: napari.viewer.Viewer, canvas_only=True
@@ -82,6 +140,7 @@ class ViewerState:
                 self.camera == other.camera
                 and self.dims == other.dims
                 and self.layers == other.layers
+                and self.ortho == other.ortho
             )
         else:
             return False
