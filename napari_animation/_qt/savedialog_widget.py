@@ -54,12 +54,12 @@ class SaveDialogWidget(QFileDialog):
             animation_kwargs["quality"] = int(
                 self.optionsWidget.qualitySlider.value()
             )
-            animation_kwargs[
-                "canvas_only"
-            ] = self.optionsWidget.canvasCheckBox.isChecked()
-            animation_kwargs[
-                "scale_factor"
-            ] = self.optionsWidget.scaleSpinBox.value()
+            animation_kwargs["canvas_only"] = (
+                self.optionsWidget.canvasCheckBox.isChecked()
+            )
+            animation_kwargs["scale_factor"] = (
+                self.optionsWidget.scaleSpinBox.value()
+            )
 
             return animation_kwargs
         else:

@@ -60,6 +60,51 @@ def axis_to_view(axis: int, ndim: int) -> Optional[str]:
     return None
 
 
+#: Map common pint unit names to compact labels for display.
+_UNIT_ABBREVIATIONS = {
+    "micrometer": "µm",
+    "micrometre": "µm",
+    "micron": "µm",
+    "um": "µm",
+    "µm": "µm",
+    "nanometer": "nm",
+    "nanometre": "nm",
+    "nm": "nm",
+    "millimeter": "mm",
+    "millimetre": "mm",
+    "mm": "mm",
+    "meter": "m",
+    "metre": "m",
+    "pixel": "px",
+    "pixels": "px",
+    "": "px",
+}
+
+
+def physical_step(viewer, axis) -> tuple:
+    """Return the world-coordinate size of one plane along ``axis``.
+
+    Returns a ``(step, unit_label)`` tuple, where ``step`` is the physical
+    spacing between planes (e.g. the Z scale / voxel depth from the layer
+    metadata) and ``unit_label`` is a compact unit string (``"µm"``, ``"px"``,
+    ...).  ``step`` is ``None`` if it cannot be determined.
+    """
+    if axis is None:
+        return None, "px"
+    try:
+        axis_range = viewer.dims.range[axis]
+        step = float(getattr(axis_range, "step", axis_range[2]))
+    except (AttributeError, IndexError, TypeError):
+        return None, "px"
+    unit = "px"
+    try:
+        raw = str(viewer.dims.units[axis]).lower()
+        unit = _UNIT_ABBREVIATIONS.get(raw, raw or "px")
+    except (AttributeError, IndexError, TypeError):
+        pass
+    return step, unit
+
+
 @dataclass
 class OrthoSlicer:
     """Configuration for an Imaris-style optical-section slicer.
@@ -106,6 +151,10 @@ class OrthoSlicer:
     def apply(self, viewer: "napari.viewer.Viewer") -> None:
         """Push this slicer's state onto a live ``viewer``."""
         self.apply_state(viewer, self.to_dict())
+
+    def resolve_axis(self, viewer: "napari.viewer.Viewer"):
+        """Return the concrete slab axis this slicer would use for ``viewer``."""
+        return self._resolve_axis(viewer, self.axis)
 
     # -- the heavy lifting is done by stateless helpers so that a keyframe's
     #    stored parameters can be applied without an OrthoSlicer instance --

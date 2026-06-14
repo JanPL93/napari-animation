@@ -1,7 +1,9 @@
+import logging
 import os
+import queue
+import threading
 from itertools import count
 from pathlib import Path
-from time import sleep
 
 import imageio
 import numpy as np
@@ -12,6 +14,12 @@ from .easing import Easing
 from .frame_sequence import FrameSequence
 from .key_frame import KeyFrame, KeyFrameList
 from .ortho_slicer import OrthoSlicer
+from .perf import PerfLogger
+
+logger = logging.getLogger("napari_animation")
+
+#: File extensions handled by the imageio-ffmpeg video writer.
+VIDEO_SUFFIXES = (".mov", ".avi", ".mpg", ".mpeg", ".mp4", ".mkv", ".wmv")
 
 
 class Animation:
@@ -93,6 +101,42 @@ class Animation:
         else:
             self.key_frames[position] = new_frame
 
+    def overwrite_keyframe(self, index: int):
+        """Replace the key-frame at ``index`` with the current viewer state.
+
+        The target key-frame's interpolation settings (``steps`` and ``ease``)
+        and name are preserved; only the captured viewer state and thumbnail
+        are updated to match the current view.
+
+        Parameters
+        ----------
+        index : int
+            Index of the key-frame to overwrite.
+        """
+        existing = self.key_frames[index]
+        ortho = (
+            self.ortho_slicer.to_dict() if self.ortho_slicer.enabled else None
+        )
+        captured = KeyFrame.from_viewer(
+            self.viewer,
+            steps=existing.steps,
+            ease=existing.ease,
+            ortho=ortho,
+        )
+        # Update the existing key-frame in place (keeping its identity, name,
+        # steps and ease) rather than replacing the list item -- replacing
+        # would emit a `changed` event before the frame-sequence cache is
+        # rebuilt, leaving navigation pointing at a stale key-frame.
+        existing.viewer_state = captured.viewer_state
+        existing.thumbnail = captured.thumbnail
+
+        # refresh the interpolation cache, then notify listeners (e.g. the list
+        # widget thumbnail) that this key-frame changed.
+        self._frames._rebuild_frame_index()
+        self.key_frames.events.changed(
+            index=index, old_value=existing, value=existing
+        )
+
     def set_to_keyframe(self, frame: int):
         """Set the viewer to a given key-frame
 
@@ -139,6 +183,7 @@ class Animation:
         format=None,
         canvas_only=True,
         scale_factor=None,
+        perf_log=True,
     ):
         """Create a movie based on key-frames
         Parameters
@@ -161,44 +206,51 @@ class Animation:
         scale_factor : float
             Rescaling factor for the image size. Only used without
             viewer (with_viewer = False).
+        perf_log : bool
+            If True (default), time each phase of the render pipeline
+            (interpolate / apply / screenshot / encode) and log a summary so
+            the rate-limiting step is visible.
+
+        Notes
+        -----
+        Frames are rendered on the calling (main) thread -- napari needs its
+        single OpenGL context there -- while encoding and writing to disk run
+        on a background thread, so the two overlap. This keeps the writer busy
+        while the next frame renders and avoids a silent pause at the end.
         """
         self._validate_animation()
+
+        perf = PerfLogger(enabled=perf_log)
+        perf.start()
 
         # create path object
         path_obj = Path(path)
         folder_path = path_obj.absolute().parent.joinpath(path_obj.stem)
 
-        # if path has no extension, save as fold of PNG
-        save_as_folder = False
-        if path_obj.suffix == "":
-            save_as_folder = True
+        # if path has no extension, save as folder of PNG
+        save_as_folder = path_obj.suffix == ""
 
-        # try to create an ffmpeg writer. If not installed default to folder creation
+        # try to create an ffmpeg writer. If not available, fall back to a
+        # folder of PNGs -- but make that fallback *loud*, since silently
+        # producing PNGs instead of the requested video is confusing.
+        writer = None
         if not save_as_folder:
             try:
-                # create imageio writer. Handle separately imageio-ffmpeg extensions and
-                # gif extension which doesn't accept the quality parameter.
-                if path_obj.suffix in [
-                    ".mov",
-                    ".avi",
-                    ".mpg",
-                    ".mpeg",
-                    ".mp4",
-                    ".mkv",
-                    ".wmv",
-                ]:
+                # gif doesn't accept the quality parameter
+                if path_obj.suffix in VIDEO_SUFFIXES:
                     writer = imageio.get_writer(
-                        path,
-                        fps=fps,
-                        quality=quality,
-                        format=format,
+                        path, fps=fps, quality=quality, format=format
                     )
                 else:
                     writer = imageio.get_writer(path, fps=fps, format=format)
-            except ValueError as err:
-                print(err)
-                print("Your file will be saved as a series of PNG files")
+            except Exception as err:  # noqa: BLE001 - report and fall back
                 save_as_folder = True
+                msg = (
+                    f"Could not create a video writer for {path!r} ({err}). "
+                    "Saving a folder of PNG files instead."
+                )
+                logger.warning(msg)
+                print(f"WARNING: {msg}")
 
         if save_as_folder:
             # if movie is saved as series of PNG, create a folder
@@ -208,31 +260,98 @@ class Animation:
             else:
                 folder_path.mkdir(exist_ok=True)
 
-        # create a frame generator
-        frames = self._frames.iter_frames(
-            self.viewer, canvas_only, scale_factor
-        )
         n_frames = len(self._frames)
 
-        # initialize progress bar and start
-        print("Rendering frames...")
-        sleep(0.05)
-        with tqdm(total=n_frames) as pbar:
-            # save frames
-            for ind, frame in enumerate(frames):
+        # -- define how a single (index, frame) pair is written to disk --
+        if writer is not None:
 
-                if not save_as_folder:
-                    writer.append_data(frame)
-                else:
-                    fname = folder_path / (
-                        path_obj.stem + "_" + str(ind) + ".png"
-                    )
-                    imsave(fname, frame)
+            def write_frame(item):
+                _, frame = item
+                writer.append_data(frame)
 
-                pbar.update(1)
+        else:
 
-        if not save_as_folder:
-            writer.close()
+            def write_frame(item):
+                ind, frame = item
+                fname = folder_path / f"{path_obj.stem}_{ind}.png"
+                imsave(fname, frame)
+
+        # -- background writer thread (encoding overlaps rendering) --
+        frame_queue: "queue.Queue" = queue.Queue(maxsize=8)
+        write_errors = []
+
+        def _consumer():
+            while True:
+                item = frame_queue.get()
+                try:
+                    if item is None:
+                        return
+                    with perf.timer("encode/write"):
+                        write_frame(item)
+                except Exception as err:  # noqa: BLE001
+                    write_errors.append(err)
+                finally:
+                    frame_queue.task_done()
+
+        writer_thread = threading.Thread(
+            target=_consumer, name="napari-animation-writer", daemon=True
+        )
+        writer_thread.start()
+
+        target = path if writer is not None else folder_path
+        print(f"Rendering {n_frames} frames -> {target}")
+        logger.info("Rendering %d frames -> %s", n_frames, target)
+
+        try:
+            with tqdm(total=n_frames) as pbar:
+                for ind in range(n_frames):
+                    if write_errors:
+                        break
+                    with perf.timer("interpolate"):
+                        state = self._frames[ind]
+                    with perf.timer("apply"):
+                        state.apply(self.viewer)
+                    with perf.timer("screenshot"):
+                        frame = self.viewer.screenshot(canvas_only=canvas_only)
+                    if scale_factor not in (None, 1):
+                        from scipy import ndimage as ndi
+
+                        with perf.timer("scale"):
+                            frame = ndi.zoom(
+                                frame, (scale_factor, scale_factor, 1)
+                            ).astype(np.uint8)
+                    frame_queue.put((ind, frame))
+                    pbar.update(1)
+        finally:
+            # signal the writer to finish and wait for the queue to drain
+            frame_queue.put(None)
+            print("Waiting for encoder to finish writing queued frames...")
+            writer_thread.join()
+
+        if write_errors:
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise write_errors[0]
+
+        if writer is not None:
+            # ffmpeg finalizes/muxes the container on close; this can take a
+            # while for large movies, so make it visible rather than a hang.
+            print("Finalizing video container (muxing)...")
+            logger.info("Finalizing video container for %s", path)
+            with perf.timer("finalize"):
+                writer.close()
+            print(f"Saved animation to {path}")
+            logger.info("Saved animation to %s", path)
+        else:
+            print(f"Saved {n_frames} PNG frames to {folder_path}")
+            logger.info("Saved %d PNG frames to %s", n_frames, folder_path)
+
+        if perf_log:
+            print(perf.report())
+            perf.log_report()
 
     def save_keyframes(self, path):
         """Save the keyframes to a file so the animation can be resumed later.
